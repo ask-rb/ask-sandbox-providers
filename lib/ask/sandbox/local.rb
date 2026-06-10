@@ -1,27 +1,29 @@
 # frozen_string_literal: true
 
-require "open3"
 require "tmpdir"
-require "stringio"
+require "fileutils"
 
 module Ask
   module Sandbox
     # Executes commands in a local subprocess with resource limits.
     # Available on all platforms (macOS, Linux). Uses stdlib only.
-    #
-    # Security measures:
-    # - Process group isolation (kills entire group on timeout)
-    # - {Process.setrlimit} for CPU, address space, processes, file size, FDs
-    # - Temp directory for execution
-    # - Environment variable sanitization
-    #
-    # @example
-    #   sandbox = Ask::Sandbox::Local.new
-    #   sandbox.call(["ruby", "-e", "puts 1+1"])
-    #   sandbox.call("ls -la", timeout: 5)
-    #
     class Local < Base
       MAX_OUTPUT_SIZE = 102_400
+
+      STRIP_ENV_PREFIXES = %w[BUNDLE_ GEM_].freeze
+      STRIP_ENV_VARS = %w[RUBYOPT RUBYLIB BASH_ENV GEM_PATH GEM_HOME
+                          BUNDLE_GEMFILE BUNDLE_PATH BUNDLE_BIN_PATH
+                          BUNDLE_SETUP BUNDLE_WITHOUT BUNDLE_FROZEN].freeze
+
+      RLIMITS = {
+        rlimit_cpu: [10, 30],
+        rlimit_nproc: [50, 50],
+        rlimit_fsize: [10_485_760, 10_485_760],
+        rlimit_nofile: [200, 200],
+        rlimit_as: [2_147_483_648, 2_147_483_648]
+      }.freeze
+
+      POLL_INTERVAL = 0.05
 
       def initialize(timeout: 30, max_output: MAX_OUTPUT_SIZE)
         @default_timeout = timeout
@@ -29,118 +31,167 @@ module Ask
       end
 
       def call(command, timeout: @default_timeout, workdir: nil, env: {}, stdin: nil)
-        Dir.mktmpdir("ask_sandbox") do |dir|
-          workdir ||= dir
+        raise ArgumentError, "command must not be nil" if command.nil?
+        raise ArgumentError, "command must not be empty" if command.respond_to?(:empty?) && command.empty?
 
-          out = StringIO.new
-          err = StringIO.new
-          timed_out = false
-          exit_code = -1
+        argv = build_argv(command)
+        child_env = build_environment(env)
 
-          begin
-            pid = spawn_process(command, workdir, env, stdin)
-
-            _, status = Timeout.timeout(timeout) do
-              Process.waitpid(pid)
-            end
-          rescue Timeout::Error
-            Process.kill("-TERM", pid) rescue nil
-            sleep 0.1
-            Process.kill("-KILL", pid) rescue nil
-            timed_out = true
-            Process.waitpid(pid) rescue nil
-          rescue => e
-            Process.kill("-KILL", pid) rescue nil
-            return Result.new(stdout: "", stderr: "Sandbox execution failed: #{e.message}",
-                             exit_code: -1, timed_out: false)
+        if workdir
+          execute_in_dir(argv, child_env, workdir, timeout, stdin)
+        else
+          Dir.mktmpdir("ask_sandbox") do |dir|
+            execute_in_dir(argv, child_env, dir, timeout, stdin)
           end
-
-          exit_code = timed_out ? -1 : ($?.exitstatus || -1)
-          out_text = truncate(out.string)
-          err_text = truncate(err.string)
-
-          Result.new(stdout: out_text, stderr: err_text, exit_code: exit_code, timed_out: timed_out)
         end
       end
 
       private
 
-      def spawn_process(command, workdir, env, stdin_data)
-        # Prepare argv
-        argv = Array(command)
+      def build_argv(command)
+        case command
+        when String then ["bash", "-c", command]
+        when Array then command.map(&:to_s)
+        else raise ArgumentError, "command must be a String or Array of Strings"
+        end
+      end
 
-        # Merge and sanitize environment
-        filtered_env = sanitize_env(ENV.to_h).merge(env)
+      def build_environment(extra_env)
+        env = {}
+        STRIP_ENV_VARS.each { |v| env[v] = nil }
+        ENV.each_key do |key|
+          next if key.start_with?("ASK_")
+          STRIP_ENV_PREFIXES.each { |p| env[key] = nil if key.start_with?(p) }
+        end
+        extra_env.each { |k, v| env[k.to_s] = v.to_s }
+        env
+      end
 
-        # Set up pipes
-        stdin_r, stdin_w = IO.pipe
+      def self.supported_rlimits
+        @supported_rlimits ||= {}.tap do |opts|
+          RLIMITS.each do |option, (soft, hard)|
+            begin
+              pid = Process.spawn({}, "true", {option => [soft, hard]})
+              Process.waitpid(pid)
+              opts[option] = [soft, hard]
+            rescue ArgumentError, Errno::EINVAL, NotImplementedError
+            end
+          end
+        end
+      end
+
+      def execute_in_dir(argv, env, dir, timeout, stdin_data)
         stdout_r, stdout_w = IO.pipe
         stderr_r, stderr_w = IO.pipe
+        stdin_r, stdin_w = IO.pipe
 
-        pid = Process.spawn(
-          *argv,
-          chdir: workdir,
+        spawn_opts = {
+          pgroup: true,
+          chdir: dir,
           in: stdin_r,
           out: stdout_w,
-          stderr: stderr_w,
-          pgroup: true,                                   # Create new process group
-          **filtered_env
-        )
+          err: stderr_w
+        }.merge!(self.class.supported_rlimits)
 
-        # Close parent sides of pipes
+        pid = Process.spawn(env, *argv, **spawn_opts)
+
         stdin_r.close
         stdout_w.close
         stderr_w.close
 
-        # Write stdin data
-        if stdin_data
-          Thread.new { stdin_w.write(stdin_data); stdin_w.close rescue nil }
-        else
+        stdin_thread = Thread.new do
+          if stdin_data && !stdin_data.empty?
+            begin
+              stdin_w.write(stdin_data)
+            rescue Errno::EPIPE
+            end
+          end
           stdin_w.close
+        rescue IOError
         end
 
-        # Capture output in threads
-        out_thread = Thread.new { IO.copy_stream(stdout_r, @out) rescue nil }
-        err_thread = Thread.new { IO.copy_stream(stderr_r, @err) rescue nil }
+        stdout_chunks = []
+        stderr_chunks = []
+        stdout_thread = Thread.new { read_stream(stdout_r, stdout_chunks) }
+        stderr_thread = Thread.new { read_stream(stderr_r, stderr_chunks) }
 
-        # Apply rlimits (must be done in parent after spawn, or in child before exec)
-        # Note: setrlimit in parent affects the parent, not the child.
-        # For actual rlimits, we need to set them in the child before exec.
-        # We'll document this as best-effort — Docker provides real limits.
-        apply_rlimits(pid)
+        exit_status, timed_out = wait_for_process(pid, timeout)
 
-        pid
+        stdin_thread.join
+        stdout_thread.join
+        stderr_thread.join
+
+        [stdout_r, stderr_r, stdin_w].each { |io| io.close rescue nil }
+
+        begin
+          Process.waitpid(pid, Process::WNOHANG)
+        rescue Errno::ECHILD
+        end
+
+        stdout_str = truncate_output(stdout_chunks.join)
+        stderr_str = truncate_output(stderr_chunks.join)
+
+        Result.new(
+          stdout: stdout_str,
+          stderr: stderr_str,
+          exit_code: exit_status&.exitstatus,
+          timed_out: timed_out
+        )
       end
 
-      def apply_rlimits(pid)
-        # Best-effort: we set rlimits on the child process.
-        # This uses Process.setrlimit which works on macOS and Linux.
-        # On macOS, some limits are advisory rather than enforced.
-        Process.setrlimit(:RLIMIT_CPU, 10, 30, pid) rescue nil     # 10s soft, 30s hard
-        Process.setrlimit(:RLIMIT_NPROC, 50, 50, pid) rescue nil   # Max 50 child processes
-        Process.setrlimit(:RLIMIT_FSIZE, 10 * 1024 * 1024, 10 * 1024 * 1024, pid) rescue nil  # 10MB file writes
-        Process.setrlimit(:RLIMIT_NOFILE, 200, 200, pid) rescue nil   # Max 200 FDs
-        Process.setrlimit(:RLIMIT_AS, 2 * 1024 * 1024 * 1024, 2 * 1024 * 1024 * 1024, pid) rescue nil  # 2GB address space
-      rescue ArgumentError
-        # Some rlimit constants may not be available on all platforms
+      def wait_for_process(pid, timeout)
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+
+        loop do
+          remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          break if remaining <= 0
+
+          _, status = Process.waitpid2(pid, Process::WNOHANG)
+          return [status, false] if status
+
+          sleep POLL_INTERVAL
+        end
+
+        kill_process_group(pid)
+        [nil, true]
+      rescue Errno::ECHILD
+        [nil, false]
       end
 
-      def sanitize_env(env)
-        # Remove sensitive env vars that could leak into sandbox
-        sensitive_keys = %w[
-          BUNDLE_GEMFILE BUNDLE_PATH BUNDLE_BIN BUNDLE_APP_CONFIG
-          GEM_HOME GEM_PATH GEM_CACHE
-          RUBYOPT RUBYLIB
-          BASH_ENV
-        ]
-        env.reject { |k, _| sensitive_keys.include?(k) }
+      def kill_process_group(pid)
+        begin
+          Process.kill(:TERM, -pid)
+          _, status = Process.waitpid2(pid, 1)
+          return if status
+        rescue Errno::ESRCH, Errno::ECHILD
+          return
+        end
+
+        begin
+          Process.kill(:KILL, -pid)
+          Process.waitpid(pid, 1)
+        rescue Errno::ESRCH, Errno::ECHILD
+        end
       end
 
-      def truncate(text)
-        return "" if text.nil?
-        return text if text.length <= @max_output
-        header = "[Output truncated to #{@max_output / 1024}KB]\n"
-        "#{header}#{text[-(@max_output - header.length)..]}"
+      def read_stream(io, chunks)
+        buffer = String.new(capacity: @max_output + 4096)
+        while (data = io.read(8192))
+          buffer << data
+          break if buffer.bytesize > @max_output
+        end
+        chunks << buffer
+      rescue IOError
+      ensure
+        io.close rescue nil
+      end
+
+      def truncate_output(str)
+        if str.bytesize > @max_output
+          str.byteslice(0, @max_output) << "\n[Truncated — output exceeds #{@max_output} bytes]\n"
+        else
+          str
+        end
       end
     end
   end

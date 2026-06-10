@@ -2,7 +2,38 @@
 
 module Ask
   module Sandbox
-    Result = Data.define(:stdout, :stderr, :exit_code, :timed_out)
+    # @!group Errors
+
+    # Base error class for all sandbox provider errors.
+    class Error < StandardError; end
+
+    # Raised when a provider is misconfigured (missing API key, invalid image, etc.).
+    class ConfigurationError < Error; end
+
+    # Raised when a provider's runtime is unavailable (Docker not running, etc.).
+    class ProviderUnavailable < Error; end
+
+    # Raised when execution fails unexpectedly.
+    class ExecutionError < Error; end
+
+    # @!endgroup
+
+    # Structured result from a sandbox command execution.
+    #
+    # @!attribute [r] stdout
+    #   @return [String] captured standard output
+    # @!attribute [r] stderr
+    #   @return [String] captured standard error
+    # @!attribute [r] exit_code
+    #   @return [Integer, nil] process exit code (nil if killed by signal)
+    # @!attribute [r] timed_out
+    #   @return [Boolean] whether execution was terminated due to timeout
+    Result = Data.define(:stdout, :stderr, :exit_code, :timed_out) do
+      # @return [Boolean] true if the command exited successfully (exit code 0)
+      def success?
+        exit_code == 0
+      end
+    end
 
     # Abstract base class for all sandbox providers.
     #
