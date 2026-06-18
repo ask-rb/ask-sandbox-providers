@@ -17,7 +17,7 @@ module Ask
 
       RLIMITS = {
         rlimit_cpu: [10, 30],
-        rlimit_nproc: [50, 50],
+        rlimit_nproc: [200, 200],
         rlimit_fsize: [10_485_760, 10_485_760],
         rlimit_nofile: [200, 200],
         rlimit_as: [2_147_483_648, 2_147_483_648]

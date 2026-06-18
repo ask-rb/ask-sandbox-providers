@@ -1,6 +1,11 @@
 # Changelog
 
-## [0.1.0] - Unreleased
+## [0.1.1] - 2026-06-18
+
+### Fixed
+- Bumped `rlimit_nproc` from 50 to 200 in `Ask::Sandbox::Local` to prevent `fork: Resource temporarily unavailable` when subprocesses create nested shells (e.g., heredocs)
+
+## [0.1.0] - 2026-06-18
 
 ### Added
 - Initial release
