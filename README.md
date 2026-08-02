@@ -2,14 +2,7 @@
 
 [![Gem Version](https://badge.fury.io/rb/ask-sandbox-providers.svg)](https://badge.fury.io/rb/ask-sandbox-providers)
 
-Sandbox providers for the ask-rb ecosystem. Isolated code execution via four backends:
-
-| Provider | Isolation | Speed | Requirement |
-|---|---|---|---|
-| `Local` | Process + rlimits (CPU, memory, processes, file size) | Instant | None (stdlib) |
-| `Docker` | Full container (read-only rootfs, no network, no capabilities) | ~1s | Docker daemon |
-| `Daytona` | Remote container via Daytona API | ~2-5s | `daytona` gem, API key |
-| `Cloudflare` | Cloudflare Workers sandbox via proxy Worker | ~1-3s | Proxy Worker URL |
+Sandbox providers for the ask-rb ecosystem: isolated code execution with a single interface and four backends. The default Local provider needs nothing; Docker, Daytona, and Cloudflare add stronger or remote isolation.
 
 ## Installation
 
@@ -22,106 +15,42 @@ gem "ask-sandbox-providers"
 ```ruby
 require "ask-sandbox-providers"
 
-# Default: Local (subprocess + rlimits on macOS/Linux)
-result = Ask::Sandbox.provider.call(["ruby", "-e", "puts 1+1"])
-puts result.stdout  # => "1\n"
-puts result.exit_code  # => 0
-puts result.timed_out  # => false
+result = Ask::Sandbox.provider.call(["ruby", "-e", "puts 1 + 1"])
+result.stdout     # => "1\n"
+result.exit_code  # => 0
+result.success?   # => true
 ```
 
-### Configure a different provider
+Commands can be an Array (executed directly, no shell) or a String (executed via `bash -c`). All providers accept `call(command, timeout: 30, workdir: nil, env: {}, stdin: nil)`.
+
+## Choosing a provider
 
 ```ruby
-# Docker (requires Docker daemon)
-Ask::Sandbox.provider = Ask::Sandbox::Docker.new(
-  image: "ruby:3.4-alpine",
-  memory: "256m",
-  network: false
-)
+Ask::Sandbox.provider = :docker   # symbol shortcuts: :local, :docker, :daytona, :cloudflare
 
-# Daytona (requires `daytona` gem + API key)
-Ask::Sandbox.provider = Ask::Sandbox::Daytona.new(
-  api_key: Ask::Auth.lookup("DAYTONA_API_KEY"),
-  server_url: "https://api.daytona.io"
-)
-
-# Cloudflare (requires a deployed proxy Worker)
-Ask::Sandbox.provider = Ask::Sandbox::Cloudflare.new(
-  worker_url: "https://sandbox-proxy.my-worker.workers.dev",
-  auth_token: ENV["CLOUDFLARE_SANDBOX_TOKEN"]
-)
+Ask::Sandbox.provider = Ask::Sandbox::Docker.new(image: "ruby:3.4-alpine", memory: "256m", network: false)
 ```
 
-### String vs Array commands
+| Provider | Isolation | Requirement |
+|---|---|---|
+| `Ask::Sandbox::Local` (default) | Subprocess with rlimits (CPU, memory, processes, file size), temp directory, sanitized environment | None, stdlib only |
+| `Ask::Sandbox::Docker` | Container with read-only rootfs, no capabilities, no network | Docker daemon |
+| `Ask::Sandbox::Daytona` | Remote sandbox via the Daytona API | `daytona` gem, API key |
+| `Ask::Sandbox::Cloudflare` | Cloudflare Workers sandbox via a proxy Worker | Deployed proxy Worker URL |
 
-```ruby
-# String → executed via shell (bash -c)
-Ask::Sandbox.provider.call("ls -la | head -5")
+Daytona resolves its API key from `Ask::Auth.lookup("DAYTONA_API_KEY")` or `ENV["DAYTONA_API_KEY"]` when `api_key:` is not given. Cloudflare falls back to the `CLOUDFLARE_SANDBOX_WORKER_URL` and `CLOUDFLARE_SANDBOX_AUTH_TOKEN` env vars.
 
-# Array → executed directly, no shell (safer for untrusted input)
-Ask::Sandbox.provider.call(["ruby", "-e", "puts ENV['HOME']"])
-```
+## Result
 
-### Return value
+Every provider returns `Ask::Sandbox::Result`, a `Data` object with `stdout`, `stderr`, `exit_code`, and `timed_out` fields, plus `#success?` (true when `exit_code == 0`).
 
-All providers return an `Ask::Sandbox::Result`:
+## Full documentation
 
-```ruby
-Result = Data.define(:stdout, :stderr, :exit_code, :timed_out)
-```
-
-## Provider Details
-
-### Local
-
-The default provider. Runs commands in a temp directory with:
-
-- **Process group isolation** — all child processes are killed on timeout
-- **`Process.setrlimit`** — CPU (10s), address space (2GB), processes (50), file size (10MB), FDs (200)
-- **Temp directory** — execution sandbox is auto-cleaned
-- **Environment sanitization** — Bundler/Ruby env vars stripped
-
-Available on every platform where Ruby runs (macOS, Linux). Zero external dependencies.
-
-### Docker
-
-Runs commands in a Docker container with security hardening:
-
-- `--read-only` — read-only root filesystem
-- `--cap-drop ALL` — no Linux capabilities
-- `--security-opt no-new-privileges` — no privilege escalation
-- `--network none` — no network egress (configurable)
-- `--memory`, `--cpus`, `--pids-limit` — resource limits
-- `--rm` — auto-cleanup on exit
-
-### Daytona
-
-Runs commands in a Daytona sandbox via the official `daytona` gem. Daytona provides secure, elastic sandboxes with full isolation, dedicated kernel, filesystem, and network stack. See [daytona.io/docs](https://www.daytona.io/docs).
-
-### Cloudflare
-
-Runs commands in a Cloudflare Workers sandbox. Requires deploying a proxy Worker that wraps `@cloudflare/sandbox`. See the [Cloudflare Sandbox SDK docs](https://developers.cloudflare.com/sandbox/) for setup.
-
-## Migration from Direct Open3 Usage
-
-If you're upgrading from `ask-tools-shell` v0.1.0 where `Code` and `Bash` tools called
-`Open3.popen3` directly — no action needed. The default `Ask::Sandbox::Local` provider
-behaves identically. To enable stronger isolation, switch the provider:
-
-```ruby
-# Before: direct Open3 (implicit Local)
-Ask::Tools::Code.new.call(code: "puts 1")
-
-# After: configure Docker for stronger isolation
-Ask::Sandbox.provider = Ask::Sandbox::Docker.new
-# The Code tool now runs code inside a Docker container automatically
-```
+The full ask-rb documentation lives at https://ask-rb.github.io/ask-docs. [ask-sandbox-providers in depth](https://ask-rb.github.io/ask-docs/core/sandbox) covers each provider and the hardening details. API reference: https://ask-rb.github.io/ask-docs/reference/api.
 
 ## Development
 
-```bash
-git clone https://github.com/ask-rb/ask-sandbox-providers.git
-cd ask-sandbox-providers
+```
 bundle install
 bundle exec rake test
 ```
