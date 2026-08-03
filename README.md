@@ -33,7 +33,7 @@ Ask::Sandbox.provider = Ask::Sandbox::Docker.new(image: "ruby:3.4-alpine", memor
 
 | Provider | Isolation | Requirement |
 |---|---|---|
-| `Ask::Sandbox::Local` (default) | Subprocess with rlimits (CPU, memory, processes, file size), temp directory, sanitized environment | None, stdlib only |
+| `Ask::Sandbox::Local` (default) | Subprocess with rlimits (CPU, memory, processes, file size), caller's working directory (or `workdir:`), sanitized environment | None, stdlib only |
 | `Ask::Sandbox::Docker` | Container with read-only rootfs, no capabilities, no network | Docker daemon |
 | `Ask::Sandbox::Daytona` | Remote sandbox via the Daytona API | `daytona` gem, API key |
 | `Ask::Sandbox::Cloudflare` | Cloudflare Workers sandbox via a proxy Worker | Deployed proxy Worker URL |

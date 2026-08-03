@@ -1,8 +1,5 @@
 # frozen_string_literal: true
 
-require "tmpdir"
-require "fileutils"
-
 module Ask
   module Sandbox
     # Executes commands in a local subprocess with resource limits.
@@ -41,13 +38,10 @@ module Ask
         argv = build_argv(command)
         child_env = build_environment(env)
 
-        if workdir
-          execute_in_dir(argv, child_env, workdir, timeout, stdin)
-        else
-          Dir.mktmpdir("ask_sandbox") do |dir|
-            execute_in_dir(argv, child_env, dir, timeout, stdin)
-          end
-        end
+        # Default to the caller's working directory so shell commands see the
+        # files the file tools (Write, Edit, ...) just created — like a real
+        # terminal. Pass workdir: to pin a specific directory instead.
+        execute_in_dir(argv, child_env, workdir || Dir.pwd, timeout, stdin)
       end
 
       private

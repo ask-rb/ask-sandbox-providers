@@ -91,8 +91,13 @@ class Ask::Sandbox::LocalTest < Minitest::Test
     original = ENV["BUNDLE_GEMFILE"]
     ENV["BUNDLE_GEMFILE"] = "/should/not/exist"
     begin
-      result = @sandbox.call(["ruby", "-e", "puts ENV['BUNDLE_GEMFILE'].inspect"])
-      assert_equal "nil\n", result.stdout
+      # Run in a Gemfile-less dir: from a project dir Ruby auto-detects the
+      # local Gemfile and re-injects BUNDLE_GEMFILE itself (like a real
+      # terminal), which would mask the inherited-env stripping we test here.
+      Dir.mktmpdir do |dir|
+        result = @sandbox.call(["ruby", "-e", "puts ENV['BUNDLE_GEMFILE'].inspect"], workdir: dir)
+        assert_equal "nil\n", result.stdout
+      end
     ensure
       ENV["BUNDLE_GEMFILE"] = original
     end
@@ -106,9 +111,16 @@ class Ask::Sandbox::LocalTest < Minitest::Test
     assert_includes result.stdout, "[Truncated"
   end
 
-  def test_temp_directory_is_used
+  def test_runs_in_caller_working_directory_by_default
     result = @sandbox.call(["ruby", "-e", "puts Dir.pwd"])
-    assert_includes result.stdout, "ask_sandbox"
+    assert_equal Dir.pwd, result.stdout.strip
+  end
+
+  def test_explicit_workdir_wins
+    Dir.mktmpdir do |dir|
+      result = @sandbox.call(["ruby", "-e", "puts Dir.pwd"], workdir: dir)
+      assert_equal File.realpath(dir), result.stdout.strip
+    end
   end
 
   def test_process_group_isolation

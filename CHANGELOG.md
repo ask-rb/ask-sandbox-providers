@@ -1,3 +1,14 @@
+## [0.1.4] — 2026-08-03
+
+### Changed
+
+- **Commands run in the caller's working directory by default** (was: a
+  fresh temp dir). The shell tools (Write, Edit, ...) operate relative to
+  the process CWD, so a sandboxed command that couldn't see a file the file
+  tools had just created — `ruby hello.rb` after writing it with Write
+  failed with `LoadError` — now works like a real terminal. Pass `workdir:`
+  to pin a specific directory (e.g. an empty temp dir for hermetic runs).
+
 ## [0.1.3] — 2026-08-03
 
 ### Fixed
