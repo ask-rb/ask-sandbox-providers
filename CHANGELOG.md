@@ -1,3 +1,13 @@
+## [0.1.3] — 2026-08-03
+
+### Fixed
+
+- **`rlimit_nproc` default raised from 200 to 1024.** nproc limits the
+  *user's* total process count, not the sandbox's — 200 is easily exceeded
+  on a busy dev machine, which made every fork inside a sandboxed command
+  fail with `Resource temporarily unavailable` (EAGAIN). 1024 still guards
+  against fork bombs without breaking normal use.
+
 ## [0.1.2] - 2026-06-25
 
 ### Changed
