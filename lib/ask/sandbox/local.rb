@@ -17,7 +17,11 @@ module Ask
 
       RLIMITS = {
         rlimit_cpu: [10, 30],
-        rlimit_nproc: [200, 200],
+        # nproc limits the *user's* total process count, not the sandbox's.
+        # 200 is easily exceeded on a busy dev machine, which makes every
+        # fork in the sandboxed command fail with EAGAIN. 1024 still guards
+        # against fork bombs without breaking normal use.
+        rlimit_nproc: [1024, 1024],
         rlimit_fsize: [10_485_760, 10_485_760],
         rlimit_nofile: [200, 200],
         rlimit_as: [2_147_483_648, 2_147_483_648]
