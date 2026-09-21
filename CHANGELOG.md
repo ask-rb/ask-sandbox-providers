@@ -25,6 +25,13 @@
 - Infrastructure: rubocop, overcommit, bin/setup, CI matrix, gemspec test.
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `Ask::Sandbox::RuntimeExecutor` bridges sandbox providers to the
+  `ask-runtime` tool executor contract.
+
 ## [0.1.1] - 2026-06-18
 
 ### Fixed

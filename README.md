@@ -44,6 +44,26 @@ Daytona resolves its API key from `Ask::Auth.lookup("DAYTONA_API_KEY")` or `ENV[
 
 Every provider returns `Ask::Sandbox::Result`, a `Data` object with `stdout`, `stderr`, `exit_code`, and `timed_out` fields, plus `#success?` (true when `exit_code == 0`).
 
+## Runtime integration
+
+`Ask::Sandbox::RuntimeExecutor` adapts any configured sandbox provider to the
+`ask-runtime` execution contract:
+
+```ruby
+executor = Ask::Sandbox::RuntimeExecutor.new(Ask::Sandbox.provider)
+call = Ask::Runtime::ToolCall.new(
+  tool_name: "sandbox.execute",
+  input: { command: ["ruby", "-e", "puts 1"] }
+)
+result = executor.execute(call)
+result.output[:stdout] # => "1\n"
+```
+
+The adapter carries `ExecutionContext#workspace` into the provider when no
+explicit `workdir` is supplied, maps non-zero exits and provider exceptions to
+`ToolResult` failures, maps provider timeouts to timed-out results, and emits
+the standard runtime lifecycle events.
+
 ## Full documentation
 
 The full ask-rb documentation lives at https://ask-rb.github.io/ask-docs. [ask-sandbox-providers in depth](https://ask-rb.github.io/ask-docs/core/sandbox) covers each provider and the hardening details. API reference: https://ask-rb.github.io/ask-docs/reference/api.

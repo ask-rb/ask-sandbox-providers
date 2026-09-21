@@ -40,9 +40,7 @@ class Ask::Sandbox::DaytonaTest < Minitest::Test
   def test_converts_array_command_to_string
     sandbox = Ask::Sandbox::Daytona.new(api_key: "dta_xxx")
     sandbox.define_singleton_method(:ensure_daytona_gem!) { true }
-    called_with = nil
     sandbox.define_singleton_method(:execute_on_daytona) do |command, _, _|
-      called_with = command
       Ask::Sandbox::Result.new(stdout: "2\n", stderr: "", exit_code: 0, timed_out: false)
     end
     result = sandbox.call(["ruby", "-e", "puts 1+1"])

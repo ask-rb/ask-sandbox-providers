@@ -6,6 +6,7 @@ require_relative "ask/sandbox/local"
 require_relative "ask/sandbox/docker"
 require_relative "ask/sandbox/daytona"
 require_relative "ask/sandbox/cloudflare"
+require_relative "ask/sandbox/runtime_executor"
 
 module Ask
   module Sandbox

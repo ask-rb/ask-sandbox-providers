@@ -65,9 +65,7 @@ class Ask::Sandbox::CloudflareTest < Minitest::Test
       auth_token: "tok"
     )
     # Stub the private make_request to capture the command
-    called_with = nil
     sandbox.define_singleton_method(:make_request) do |cmd, _timeout|
-      called_with = cmd
       Ask::Sandbox::Result.new(stdout: "2\n", stderr: "", exit_code: 0, timed_out: false)
     end
     result = sandbox.call(["ruby", "-e", "puts 1+1"])
