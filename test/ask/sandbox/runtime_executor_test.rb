@@ -3,6 +3,8 @@
 require "test_helper"
 
 class Ask::Sandbox::RuntimeExecutorTest < Minitest::Test
+  include Ask::Runtime::Testing::ExecutorContract
+
   class FakeProvider
     attr_reader :calls
 
@@ -17,6 +19,32 @@ class Ask::Sandbox::RuntimeExecutorTest < Minitest::Test
 
       @result
     end
+  end
+
+  class ContractProvider
+    def call(command, **_options)
+      if command == "fail"
+        Ask::Sandbox::Result.new(stdout: "", stderr: "failed", exit_code: 1, timed_out: false)
+      else
+        Ask::Sandbox::Result.new(stdout: "ok", stderr: "", exit_code: 0, timed_out: false)
+      end
+    end
+  end
+
+  def test_sandbox_executor_conforms_to_runtime_contract
+    context_factory = ->(event_sink:, canceller: nil) do
+      Ask::Runtime::ExecutionContext.new(
+        session_id: "s_sandbox", turn: 1, event_sink: event_sink, canceller: canceller
+      )
+    end
+
+    assert_conforms_to_runtime_contract(
+      Ask::Sandbox::RuntimeExecutor.new(ContractProvider.new),
+      success_call: build_tool_call(input: { command: "ok" }),
+      failure_call: build_tool_call(input: { command: "fail" }),
+      cancelled_call: build_tool_call(input: { command: "ok" }),
+      context_factory: context_factory
+    )
   end
 
   def build_tool_call(**overrides)
